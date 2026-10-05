@@ -60,10 +60,6 @@
     margin: 10mm;
     size: A4;
   }
-  @page.receipt {
-    size: 80mm auto;
-    margin: 0;
-  }
 }
 </style>
 <style>
@@ -1163,9 +1159,15 @@ tbody tr:hover td{background:var(--g50)}
     <!-- Action buttons -->
     <div style="padding:16px;display:flex;flex-direction:column;gap:10px">
 
+      <!-- RawBT: works with Bluetooth Classic P58 printers on Android -->
+      <button onclick="printViaRawBT()" style="width:100%;padding:16px;border-radius:12px;background:var(--gold);color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;min-height:56px">
+        <span>🖨️</span><span>Print with RawBT (P58 / Android)</span>
+      </button>
+      <div style="font-size:11px;color:var(--g400);text-align:center;margin-top:-4px">One-time: install <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener" style="color:var(--mid);font-weight:700">RawBT</a>, pair the P58 in phone Bluetooth settings, then choose it in RawBT.</div>
+
       <!-- Connect / Print button -->
-      <button id="bt-main-btn" onclick="thermalMainAction()" style="width:100%;padding:16px;border-radius:12px;background:var(--green);color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;min-height:56px">
-        <span>📡</span><span id="bt-main-label">Connect Printer</span>
+      <button id="bt-main-btn" onclick="thermalMainAction()" style="width:100%;padding:14px;border-radius:12px;background:var(--green);color:#fff;border:none;font-size:14px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;min-height:50px">
+        <span>📡</span><span id="bt-main-label">Connect Printer (BLE only)</span>
       </button>
 
       <!-- Download TXT fallback -->
@@ -2051,8 +2053,8 @@ function buildThermalReceipt(sale){
 
   // Items
   (sale.lines||[]).forEach(l=>{
-    const name=thermalSanitise(l.n).substring(0,W);
-    push(name);
+    const name=thermalSanitise(l.n);
+    for(let i=0;i<name.length;i+=W) push(name.substring(i,i+W));
     const qtyStr='  x'+l.qty+' @ KES '+l.r.toLocaleString();
     const totStr='KES '+l.t.toLocaleString();
     push(thermalKV(qtyStr,totStr));
@@ -2071,6 +2073,31 @@ function buildThermalReceipt(sale){
   push('');
 
   return lines.join('\n');
+}
+
+// Real ESC/POS bytes: init + text + feed (no cut command: handhelds have no cutter
+// and some firmwares print garbage for GS V)
+function buildEscPosBytes(sale){
+  const body=new TextEncoder().encode(buildThermalReceipt(sale).replace(/\n+$/,'')+'\n');
+  const out=new Uint8Array(2+body.length+4);
+  out.set(THERMAL.ESC_INIT,0);
+  out.set(body,2);
+  out.set([0x0A,0x0A,0x0A,0x0A],2+body.length);
+  return out;
+}
+function bytesToBase64(u8){
+  let bin='';
+  for(let i=0;i<u8.length;i+=0x8000) bin+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000));
+  return btoa(bin);
+}
+
+// Bluetooth Classic printers (most P58 handhelds) cannot be reached by Web Bluetooth.
+// RawBT (free Android app) owns the Bluetooth connection; we hand it the ESC/POS bytes.
+function printViaRawBT(){
+  const sale=getCurrentSaleData();
+  const b64=bytesToBase64(buildEscPosBytes(sale));
+  showToast('Opening RawBT… select your P58 there if asked','success');
+  window.location.href='intent:base64,'+b64+'#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
 }
 
 // Collect current receipt data from DOM / sale store
@@ -2185,7 +2212,7 @@ function updateBtUI(){
     txt.textContent='Not connected';
     sub.textContent='Tap "Connect Printer" to pair your P58E';
     btn.style.background='var(--green)';
-    lbl.textContent='Connect Printer';
+    lbl.textContent='Connect Printer (BLE only)';
     btn.querySelector('span').textContent='📡';
   }
 }
@@ -2243,36 +2270,31 @@ async function connectP58E(){
         '000018f0-0000-1000-8000-00805f9b34fb', // common generic printer
         '0000ff00-0000-1000-8000-00805f9b34fb',
         '0000ffe0-0000-1000-8000-00805f9b34fb',
+        'e7810a71-73ae-499d-8c15-faa9aef0c3f2', // very common on Chinese 58mm thermal printers
+        '49535343-fe7d-4ae5-8fa9-9fafd205e455', // ISSC / Microchip BLE serial
+        '0000ae30-0000-1000-8000-00805f9b34fb',
+        '0000fee7-0000-1000-8000-00805f9b34fb',
+        '0000ff12-0000-1000-8000-00805f9b34fb',
+        '0000fff0-0000-1000-8000-00805f9b34fb',
+        '00001101-0000-1000-8000-00805f9b34fb',
       ]
     });
     lbl.textContent='Connecting…';
     const server=await device.gatt.connect();
-    // Try known BLE printer service UUIDs in order
-    const serviceUUIDs=[
-      '000018f0-0000-1000-8000-00805f9b34fb',
-      '0000ff00-0000-1000-8000-00805f9b34fb',
-      '0000ffe0-0000-1000-8000-00805f9b34fb',
-      SPP
-    ];
-    let service=null, characteristic=null;
-    for(const uuid of serviceUUIDs){
-      try{
-        service=await server.getPrimaryService(uuid);
-        if(service)break;
-      }catch(e){}
-    }
-    if(!service){
-      // Last resort — get any available service
-      const svcs=await server.getPrimaryServices();
-      if(svcs.length)service=svcs[0];
-    }
-    if(!service)throw new Error('No printable service found on this device');
-    const chars=await service.getCharacteristics();
-    // Pick writable characteristic
-    for(const c of chars){
-      if(c.properties.write||c.properties.writeWithoutResponse){
-        characteristic=c;break;
-      }
+    // Find a writable characteristic: known printer services first, then any service
+    const preferred=['e7810a71-73ae-499d-8c15-faa9aef0c3f2','000018f0-0000-1000-8000-00805f9b34fb','0000ff00-0000-1000-8000-00805f9b34fb','0000ffe0-0000-1000-8000-00805f9b34fb','49535343-fe7d-4ae5-8fa9-9fafd205e455'];
+    let characteristic=null;
+    let svcs=[];
+    try{ svcs=await server.getPrimaryServices(); }catch(e){}
+    svcs.sort((a,b)=>{
+      const ia=preferred.indexOf(a.uuid), ib=preferred.indexOf(b.uuid);
+      return (ia<0?99:ia)-(ib<0?99:ib);
+    });
+    for(const svc of svcs){
+      let chars=[];
+      try{ chars=await svc.getCharacteristics(); }catch(e){ continue; }
+      const c=chars.find(c=>c.properties.write||c.properties.writeWithoutResponse);
+      if(c){ characteristic=c; break; }
     }
     if(!characteristic)throw new Error('No writable characteristic found');
     THERMAL.device=device;
@@ -2290,11 +2312,11 @@ async function connectP58E(){
     if(err.name==='NotFoundError'||err.message.includes('cancelled')){
       showToast('Pairing cancelled','error');
     } else if(err.message.includes('No printable')||err.message.includes('No writable')){
-      showToast('P58E paired but Classic BT not supported by browser. Use .txt download + PrintHand app.','error');
+      showToast('This printer is Bluetooth Classic, which browsers cannot use. Tap "Print with RawBT" instead.','error');
     } else {
       showToast('Could not connect: '+err.message,'error');
     }
-    lbl.textContent='Connect Printer';btn.disabled=false;
+    lbl.textContent='Connect Printer (BLE only)';btn.disabled=false;
     updateBtUI();
   }
   btn.disabled=false;
@@ -2303,23 +2325,14 @@ async function connectP58E(){
 // ── SEND TO PRINTER ───────────────────────────────────────
 async function sendThermalPrint(){
   const sale=getCurrentSaleData();
-  const txt=buildThermalReceipt(sale);
   try{
-    const enc=new TextEncoder();
-    // ESC/POS init
-    const init=new Uint8Array(THERMAL.ESC_INIT);
-    await writeChunk(THERMAL.characteristic,init);
-    // Send text in 128-byte chunks (BLE MTU safe)
-    const bytes=enc.encode(txt+'\n');
-    const CHUNK=128;
+    const bytes=buildEscPosBytes(sale);
+    const CHUNK=20; // default BLE ATT payload; larger writes are dropped by many printers
     for(let i=0;i<bytes.length;i+=CHUNK){
       await writeChunk(THERMAL.characteristic,bytes.slice(i,i+CHUNK));
-      await delay(30);
+      await delay(25);
     }
-    // Feed and cut
-    const tail=new Uint8Array([...THERMAL.FEED3,...THERMAL.CUT]);
-    await writeChunk(THERMAL.characteristic,tail);
-    showToast('Receipt sent to P58E ✓','success');
+    showToast('Receipt sent to printer ✓','success');
     setTimeout(()=>closePrintPanel(),1200);
   }catch(err){
     showToast('Print failed: '+err.message,'error');
