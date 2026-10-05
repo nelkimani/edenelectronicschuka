@@ -2,7 +2,7 @@
    Offline-first: the app opens instantly from cache (even with no internet) and refreshes quietly in the background.
    All shop data (sales, stock, expenses) lives in the device's own storage, so a till keeps working offline.
    To ship an update: upload the new index.html, and bump VERSION below so every device picks it up. */
-const VERSION = 'eden-v4';
+const VERSION = 'eden-v5';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/icon-96.png', './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-512.png', './icons/apple-touch-icon.png', './icons/favicon-32.png'];
 const CDN = [
   'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js',
