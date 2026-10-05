@@ -1170,6 +1170,8 @@ tbody tr:hover td{background:var(--g50)}
         <span>📡</span><span id="bt-main-label">Connect Printer (BLE only)</span>
       </button>
 
+      <button onclick="tryNextChannel()" style="width:100%;padding:12px;border-radius:12px;background:#fff;color:var(--green);border:1.5px solid var(--mint);font-size:13px;font-weight:700;cursor:pointer">🔁 Nothing printed? Try next channel</button>
+
       <!-- Download TXT fallback -->
       <button onclick="downloadReceiptTxt()" style="width:100%;padding:14px;border-radius:12px;background:var(--pale);color:var(--green);border:1.5px solid var(--mint);font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>📥</span> Download as .txt (use with PrintHand)
@@ -2202,7 +2204,7 @@ function updateBtUI(){
     dot.style.background='#22c55e';
     bar.style.borderColor='#bbf7d0';bar.style.background='#f0fdf4';
     txt.textContent='Connected — '+(THERMAL.device?THERMAL.device.name:'P58E');
-    sub.textContent='Ready to print';
+    sub.textContent='Ready to print'+(THERMAL.channels?' · channel '+((THERMAL.chIdx||0)+1)+'/'+THERMAL.channels.length:'');
     btn.style.background='#16a34a';
     lbl.textContent='Print Now';
     btn.querySelector('span').textContent='🖨️';
@@ -2283,20 +2285,26 @@ async function connectP58E(){
     const server=await device.gatt.connect();
     // Find a writable characteristic: known printer services first, then any service
     const preferred=['e7810a71-73ae-499d-8c15-faa9aef0c3f2','000018f0-0000-1000-8000-00805f9b34fb','0000ff00-0000-1000-8000-00805f9b34fb','0000ffe0-0000-1000-8000-00805f9b34fb','49535343-fe7d-4ae5-8fa9-9fafd205e455'];
-    let characteristic=null;
+    const knownChars=['bef8d6c9-9c21-4c9e-b632-bd58c1009f9f','49535343-8841-43f4-a8d4-ecbe34729bb3','0000ff02-0000-1000-8000-00805f9b34fb','00002af1-0000-1000-8000-00805f9b34fb','0000ffe1-0000-1000-8000-00805f9b34fb'];
     let svcs=[];
     try{ svcs=await server.getPrimaryServices(); }catch(e){}
     svcs.sort((a,b)=>{
       const ia=preferred.indexOf(a.uuid), ib=preferred.indexOf(b.uuid);
       return (ia<0?99:ia)-(ib<0?99:ib);
     });
+    const channels=[];
     for(const svc of svcs){
       let chars=[];
       try{ chars=await svc.getCharacteristics(); }catch(e){ continue; }
-      const c=chars.find(c=>c.properties.write||c.properties.writeWithoutResponse);
-      if(c){ characteristic=c; break; }
+      chars.filter(c=>c.properties.write||c.properties.writeWithoutResponse).forEach(c=>channels.push(c));
     }
-    if(!characteristic)throw new Error('No writable characteristic found');
+    channels.sort((a,b)=>{
+      const ia=knownChars.indexOf(a.uuid), ib=knownChars.indexOf(b.uuid);
+      return (ia<0?99:ia)-(ib<0?99:ib);
+    });
+    if(!channels.length)throw new Error('No writable characteristic found');
+    THERMAL.channels=channels;THERMAL.chIdx=0;
+    const characteristic=channels[0];
     THERMAL.device=device;
     THERMAL.characteristic=characteristic;
     THERMAL.connected=true;
@@ -2323,7 +2331,7 @@ async function connectP58E(){
 }
 
 // ── SEND TO PRINTER ───────────────────────────────────────
-async function sendThermalPrint(){
+async function sendThermalPrint(retry){
   const sale=getCurrentSaleData();
   try{
     const bytes=buildEscPosBytes(sale);
@@ -2332,8 +2340,7 @@ async function sendThermalPrint(){
       await writeChunk(THERMAL.characteristic,bytes.slice(i,i+CHUNK));
       await delay(25);
     }
-    showToast('Receipt sent to printer ✓','success');
-    setTimeout(()=>closePrintPanel(),1200);
+    showToast('Sent to printer. If nothing printed, tap "Nothing printed? Try next channel".','success');
   }catch(err){
     showToast('Print failed: '+err.message,'error');
     THERMAL.connected=false;THERMAL.characteristic=null;
@@ -2342,11 +2349,20 @@ async function sendThermalPrint(){
 }
 
 async function writeChunk(char,data){
-  if(char.properties.writeWithoutResponse){
-    await char.writeValueWithoutResponse(data);
+  if(char.properties.write){
+    if(char.writeValueWithResponse) await char.writeValueWithResponse(data); else await char.writeValue(data);
   } else {
-    await char.writeValue(data);
+    await char.writeValueWithoutResponse(data);
   }
+}
+// Receipt went out but nothing printed? Switch to the next writable channel and print again
+async function tryNextChannel(){
+  if(!THERMAL.channels||THERMAL.channels.length<2){showToast('No other channel on this printer. Use RawBT.','error');return;}
+  THERMAL.chIdx=(THERMAL.chIdx+1)%THERMAL.channels.length;
+  THERMAL.characteristic=THERMAL.channels[THERMAL.chIdx];
+  showToast('Trying channel '+(THERMAL.chIdx+1)+' of '+THERMAL.channels.length+'…','success');
+  updateBtUI();
+  await sendThermalPrint(true);
 }
 function delay(ms){return new Promise(r=>setTimeout(r,ms));}
 
