@@ -24,44 +24,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<style id="print-styles">
-/* ══ PRINT STYLES ══════════════════════════════════════ */
-@media print {
-  /* Hide everything except what we're printing */
-  body > *:not(#print-area) { display: none !important; }
-  #print-area {
-    display: block !important;
-    position: fixed;
-    inset: 0;
-    z-index: 9999;
-    background: #fff;
-    padding: 0;
-    margin: 0;
-  }
-  #print-area.receipt-print .rp {
-    box-shadow: none !important;
-    border-radius: 0 !important;
-    max-height: none !important;
-    width: 80mm;
-    margin: 0 auto;
-    transform: none !important;
-  }
-  #print-area.receipt-print .rpacts { display: none !important; }
-  #print-area.receipt-print .rpt {
-    border-radius: 0 !important;
-  }
-  /* Report print area */
-  #print-area.report-print {
-    padding: 20px;
-    overflow: visible;
-  }
-  #print-area.report-print .no-print { display: none !important; }
-  @page {
-    margin: 10mm;
-    size: A4;
-  }
-}
-</style>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -1159,18 +1121,10 @@ tbody tr:hover td{background:var(--g50)}
     <!-- Action buttons -->
     <div style="padding:16px;display:flex;flex-direction:column;gap:10px">
 
-      <!-- RawBT: works with Bluetooth Classic P58 printers on Android -->
-      <button onclick="printViaRawBT()" style="width:100%;padding:16px;border-radius:12px;background:var(--gold);color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;min-height:56px">
-        <span>🖨️</span><span>Print with RawBT (P58 / Android)</span>
-      </button>
-      <div style="font-size:11px;color:var(--g400);text-align:center;margin-top:-4px">One-time: install <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener" style="color:var(--mid);font-weight:700">RawBT</a>, pair the P58 in phone Bluetooth settings, then choose it in RawBT.</div>
-
       <!-- Connect / Print button -->
-      <button id="bt-main-btn" onclick="thermalMainAction()" style="width:100%;padding:14px;border-radius:12px;background:var(--green);color:#fff;border:none;font-size:14px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;min-height:50px">
-        <span>📡</span><span id="bt-main-label">Connect Printer (BLE only)</span>
+      <button id="bt-main-btn" onclick="thermalMainAction()" style="width:100%;padding:16px;border-radius:12px;background:var(--green);color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;min-height:56px">
+        <span>📡</span><span id="bt-main-label">Connect Printer</span>
       </button>
-
-      <button onclick="tryNextChannel()" style="width:100%;padding:12px;border-radius:12px;background:#fff;color:var(--green);border:1.5px solid var(--mint);font-size:13px;font-weight:700;cursor:pointer">🔁 Nothing printed? Try next channel</button>
 
       <!-- Download TXT fallback -->
       <button onclick="downloadReceiptTxt()" style="width:100%;padding:14px;border-radius:12px;background:var(--pale);color:var(--green);border:1.5px solid var(--mint);font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px">
@@ -1180,6 +1134,11 @@ tbody tr:hover td{background:var(--g50)}
       <!-- Browser print -->
       <button onclick="browserPrint()" style="width:100%;padding:14px;border-radius:12px;background:var(--g50);color:var(--g600);border:1.5px solid var(--g100);font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>🖥️</span> Print via Browser (WiFi/USB printer)
+      </button>
+
+      <!-- USB / Serial thermal printer (hidden unless the browser supports it) -->
+      <button id="raw-print-btn" onclick="rawPrint()" style="display:none;width:100%;padding:14px;border-radius:12px;background:var(--g50);color:var(--g600);border:1.5px solid var(--g100);font-size:14px;font-weight:700;cursor:pointer;align-items:center;justify-content:center;gap:8px">
+        <span>🔌</span> Print to USB / Serial printer
       </button>
 
       <!-- PrintHand link -->
@@ -1218,9 +1177,338 @@ tbody tr:hover td{background:var(--g50)}
   </div>
 </div>
 
-<!-- Hidden print area -->
-<div id="print-area" style="display:none"></div>
 
+<script>
+/* receipt.js (receipt-printing skill) — Eden settings */
+/*! receipt.js - receipt printing for web POS apps. No dependencies.
+ *
+ *  Route A  printHTML / printElement : any printer with an OS driver (hidden iframe, thermal CSS)
+ *  Route B  buildEscPos / printRaw   : raw ESC/POS over WebUSB, Web Serial or Web Bluetooth
+ *
+ *  Exposes window.NotifyReceipt. Edit `config` below (shop details, paper width, columns).
+ *  Never put the closing script tag in this file - it is inlined into HTML by the patcher.
+ */
+(function (root) {
+  'use strict';
+
+  var config = {
+    shop: {
+      name: 'NOTIFY MOTORCYCLE SPARES',
+      lines: ['Chuka Town, Chuka-Kathituni Rd', 'Opp. Chuka Boys High School', 'Tel: 0718 333 885'],
+      footer: ['Thank you for your business!', 'Safe riding!']
+    },
+    currency: 'KES',
+    paperMm: 80,       // 80 or 58 (browser printing width)
+    cols: 42,          // ESC/POS characters per line: 58mm -> 32, 80mm -> 42 (48 on some printers)
+    cut: true,         // cut paper after the receipt
+    openDrawer: false, // pulse the cash drawer on cash sales
+    baudRate: 9600,    // Web Serial only
+    bleChunk: 100      // Web Bluetooth write size; use 20 if output is garbled or truncated
+  };
+
+  /* ---------- text helpers (shared) ---------- */
+
+  // Raw printers use a single-byte code page; strip everything outside printable ASCII.
+  function ascii(s) {
+    return String(s == null ? '' : s)
+      .replace(/[\u2013\u2014\u2212]/g, '-')
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/[\u201C\u201D]/g, '"')
+      .replace(/\u00A0/g, ' ')
+      .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\x20-\x7E]/g, '');
+  }
+
+  function money(n) {
+    return (Number(n) || 0).toLocaleString('en-US', { maximumFractionDigits: 2 });
+  }
+
+  function two(n) { return (n < 10 ? '0' : '') + n; }
+
+  function fmtDate(d) {
+    if (isNaN(d.getTime())) d = new Date();
+    return {
+      date: two(d.getDate()) + '/' + two(d.getMonth() + 1) + '/' + d.getFullYear(),
+      time: two(d.getHours()) + ':' + two(d.getMinutes())
+    };
+  }
+
+  // "left ........ right" on exactly `cols` characters; the left side is trimmed if needed.
+  function pad(left, right, cols) {
+    left = ascii(left); right = ascii(right);
+    var room = Math.max(1, cols - right.length - 1);
+    if (left.length > room) left = left.slice(0, room);
+    return left + new Array(Math.max(1, cols - left.length - right.length) + 1).join(' ') + right;
+  }
+
+  function wrap(text, cols) {
+    var out = [], line = '';
+    ascii(text).split(/\s+/).filter(Boolean).forEach(function (w) {
+      while (w.length > cols) {
+        if (line) { out.push(line); line = ''; }
+        out.push(w.slice(0, cols));
+        w = w.slice(cols);
+      }
+      if (!line) line = w;
+      else if ((line + ' ' + w).length <= cols) line += ' ' + w;
+      else { out.push(line); line = w; }
+    });
+    if (line) out.push(line);
+    return out.length ? out : [''];
+  }
+
+  /* ---------- Route A: browser / OS printing ---------- */
+
+  // Prints markup through a hidden iframe. Unlike window.open() popups it is not blocked,
+  // and it clones the page's own <style>/<link> tags so utility classes (Tailwind etc.)
+  // keep working - a popup with a hand-written stylesheet silently loses them.
+  function printHTML(html, opts) {
+    opts = opts || {};
+    var mm = opts.paperMm || config.paperMm;
+    var width = mm === 58 ? '48mm' : '72mm'; // printable width is a little under the roll width
+    var head = '<base href="' + document.baseURI + '">';
+    Array.prototype.forEach.call(document.querySelectorAll('style'), function (s) {
+      head += '<style>' + s.textContent + '</style>';
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('link[rel="stylesheet"]'), function (l) {
+      head += l.outerHTML;
+    });
+    head += '<style>' +
+      '@page{margin:0}' +
+      'html,body{margin:0;padding:0;background:#fff!important;color:#000!important}' +
+      'body{box-sizing:border-box;width:' + width + ';padding:1mm 1mm 8mm;' +
+      'font-family:"Courier New",ui-monospace,monospace;-webkit-print-color-adjust:exact;print-color-adjust:exact}' +
+      '</style>';
+
+    var f = document.createElement('iframe');
+    f.setAttribute('aria-hidden', 'true');
+    f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+    var done = false;
+    function cleanup() {
+      if (done) return;
+      done = true;
+      setTimeout(function () { if (f.parentNode) f.parentNode.removeChild(f); }, 500);
+    }
+    f.onload = function () {
+      try {
+        f.contentWindow.focus();
+        f.contentWindow.onafterprint = cleanup;
+        f.contentWindow.print();
+      } finally {
+        setTimeout(cleanup, 60000); // Safari/Firefox print asynchronously; do not remove early
+      }
+    };
+    f.srcdoc = '<!doctype html><html><head><meta charset="utf-8">' + head + '</head><body>' + html + '</body></html>';
+    document.body.appendChild(f);
+  }
+
+  function printElement(el) {
+    if (!el) return;
+    printHTML(el.outerHTML);
+  }
+
+  /* ---------- Route B: ESC/POS ---------- */
+
+  var ESC = 0x1b, GS = 0x1d;
+
+  function Enc(cols) { this.cols = cols; this.b = []; }
+  Enc.prototype.raw = function () { for (var i = 0; i < arguments.length; i++) this.b.push(arguments[i] & 0xff); return this; };
+  Enc.prototype.text = function (s) { s = ascii(s); for (var i = 0; i < s.length; i++) this.b.push(s.charCodeAt(i)); return this; };
+  Enc.prototype.line = function (s) { return this.text(s || '').raw(0x0a); };
+  Enc.prototype.align = function (n) { return this.raw(ESC, 0x61, n); };                 // 0 left, 1 centre, 2 right
+  Enc.prototype.bold = function (on) { return this.raw(ESC, 0x45, on ? 1 : 0); };
+  Enc.prototype.size = function (w, h) { return this.raw(GS, 0x21, ((w - 1) << 4) | (h - 1)); }; // 1..8 each
+  Enc.prototype.rule = function (ch) { return this.line(new Array(this.cols + 1).join(ch || '-')); };
+  Enc.prototype.feed = function (n) { return this.raw(ESC, 0x64, n); };
+  Enc.prototype.cut = function () { return this.feed(3).raw(GS, 0x56, 0x42, 0x00); };    // feed, then partial cut
+  Enc.prototype.drawer = function () { return this.raw(ESC, 0x70, 0x00, 0x19, 0xfa); };  // cash drawer pin 2
+  Enc.prototype.bytes = function () { return new Uint8Array(this.b); };
+
+  // sale = { receiptNumber, cashierName, items:[{product:{name,sellingPrice},quantity}],
+  //          subtotal, discount, total, paymentMethod, amountPaid, change, date }
+  // Note: item.discount is deliberately ignored - the POS only applies a sale-level discount,
+  // and subtracting both would double count.
+  function buildEscPos(sale, opts) {
+    var cfg = {}, k;
+    for (k in config) cfg[k] = config[k];
+    for (k in (opts || {})) cfg[k] = opts[k];
+    var cols = cfg.cols, cur = cfg.currency, shop = cfg.shop, e = new Enc(cols);
+    var when = fmtDate(new Date(sale.date));
+    var isCash = String(sale.paymentMethod).toLowerCase() === 'cash';
+
+    e.raw(ESC, 0x40);                                   // initialise printer
+    e.align(1).bold(true);
+    wrap(shop.name, cols).forEach(function (l) { e.line(l); });
+    e.bold(false);
+    shop.lines.forEach(function (l) { wrap(l, cols).forEach(function (x) { e.line(x); }); });
+    e.align(0).rule();
+    e.line(pad('Receipt:', sale.receiptNumber, cols));
+    e.line(pad('Date:', when.date, cols));
+    e.line(pad('Time:', when.time, cols));
+    e.line(pad('Cashier:', sale.cashierName, cols));
+    e.rule();
+
+    (sale.items || []).forEach(function (it) {
+      var p = it.product || {}, qty = Number(it.quantity) || 0, unit = Number(p.sellingPrice) || 0;
+      wrap(p.name, cols).forEach(function (l) { e.line(l); });
+      e.line(pad('  ' + qty + ' x ' + money(unit), money(unit * qty), cols));
+    });
+
+    e.rule();
+    e.line(pad('Subtotal:', cur + ' ' + money(sale.subtotal), cols));
+    if (Number(sale.discount) > 0) e.line(pad('Discount:', '-' + cur + ' ' + money(sale.discount), cols));
+    e.bold(true).size(1, 2).line(pad('TOTAL:', cur + ' ' + money(sale.total), cols)).size(1, 1).bold(false);
+    e.line(pad('Payment:', String(sale.paymentMethod || '').toUpperCase(), cols));
+    if (isCash && sale.amountPaid != null) {
+      e.line(pad('Paid:', cur + ' ' + money(sale.amountPaid), cols));
+      e.line(pad('Change:', cur + ' ' + money(sale.change), cols));
+    }
+    e.rule();
+    e.align(1);
+    (shop.footer || []).forEach(function (l) { wrap(l, cols).forEach(function (x) { e.line(x); }); });
+    e.align(0);
+    if (cfg.openDrawer && isCash) e.drawer();
+    if (cfg.cut) e.cut(); else e.feed(4);
+    return e.bytes();
+  }
+
+  /* ---------- transports (need a real printer to verify; Chrome/Edge, secure context) ---------- */
+
+  var BLE_SERVICES = [
+    '000018f0-0000-1000-8000-00805f9b34fb',
+    '0000ff00-0000-1000-8000-00805f9b34fb',
+    '0000fee7-0000-1000-8000-00805f9b34fb',
+    'e7810a71-73ae-499d-8c15-faa9aef0c3f2',
+    '49535343-fe7d-4ae5-8fa9-9fafd205e455'
+  ];
+
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  async function connectSerial() {
+    if (!navigator.serial) throw new Error('Web Serial is not available in this browser');
+    var port = await navigator.serial.requestPort();
+    await port.open({ baudRate: config.baudRate });
+    var writer = port.writable.getWriter();
+    return {
+      kind: 'serial',
+      write: function (b) { return writer.write(b); },
+      close: async function () { try { writer.releaseLock(); await port.close(); } catch (e) { /* ignore */ } }
+    };
+  }
+
+  async function connectUsb() {
+    if (!navigator.usb) throw new Error('WebUSB is not available in this browser');
+    var dev = await navigator.usb.requestDevice({ filters: [{ classCode: 7 }] }); // 7 = printer class
+    await dev.open();
+    if (!dev.configuration) await dev.selectConfiguration(1);
+    var iface = null, ep = null;
+    dev.configuration.interfaces.some(function (i) {
+      var alt = i.alternates.filter(function (a) { return a.interfaceClass === 7; })[0];
+      var out = alt && alt.endpoints.filter(function (x) { return x.direction === 'out'; })[0];
+      if (!out) return false;
+      iface = i; ep = out; return true;
+    });
+    if (!iface) throw new Error('No printer interface found on this USB device');
+    await dev.claimInterface(iface.interfaceNumber);
+    return {
+      kind: 'usb',
+      write: async function (b) {
+        for (var i = 0; i < b.length; i += 4096) await dev.transferOut(ep.endpointNumber, b.slice(i, i + 4096));
+      },
+      close: async function () { try { await dev.close(); } catch (e) { /* ignore */ } }
+    };
+  }
+
+  async function connectBle() {
+    if (!navigator.bluetooth) throw new Error('Web Bluetooth is not available in this browser');
+    var dev = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: BLE_SERVICES });
+    var server = await dev.gatt.connect();
+    var ch = null, services = await server.getPrimaryServices();
+    for (var i = 0; i < services.length && !ch; i++) {
+      var chars = await services[i].getCharacteristics();
+      for (var j = 0; j < chars.length; j++) {
+        if (chars[j].properties.write || chars[j].properties.writeWithoutResponse) { ch = chars[j]; break; }
+      }
+    }
+    if (!ch) throw new Error('No writable Bluetooth characteristic found - printer not supported');
+    return {
+      kind: 'bluetooth',
+      write: async function (b) {
+        for (var i = 0; i < b.length; i += config.bleChunk) {
+          var part = b.slice(i, i + config.bleChunk);
+          if (ch.properties.writeWithoutResponse) await ch.writeValueWithoutResponse(part);
+          else await ch.writeValue(part);
+          await sleep(15);
+        }
+      },
+      close: async function () { try { dev.gatt.disconnect(); } catch (e) { /* ignore */ } }
+    };
+  }
+
+  var link = null;
+
+  function available() {
+    var a = [];
+    if (typeof navigator !== 'undefined') {
+      if (navigator.usb) a.push('usb');
+      if (navigator.serial) a.push('serial');
+      if (navigator.bluetooth) a.push('bluetooth');
+    }
+    return a;
+  }
+
+  function pickKind() {
+    var a = available(), saved = null;
+    try { saved = localStorage.getItem('nms_printer_kind'); } catch (e) { /* ignore */ }
+    if (saved && a.indexOf(saved) > -1) return saved;
+    if (!a.length) throw new Error('This browser cannot talk to printers directly. Use Chrome or Edge, or the normal Print button.');
+    if (a.length === 1) return a[0];
+    var ans = (root.prompt('Printer connection: ' + a.join(' / '), a[0]) || '').toLowerCase().trim();
+    if (a.indexOf(ans) < 0) throw Object.assign(new Error('Cancelled'), { name: 'NotFoundError' });
+    try { localStorage.setItem('nms_printer_kind', ans); } catch (e) { /* ignore */ }
+    return ans;
+  }
+
+  async function connect(kind) {
+    kind = kind || pickKind();
+    link = kind === 'usb' ? await connectUsb() : kind === 'serial' ? await connectSerial() : await connectBle();
+    return link;
+  }
+
+  async function disconnect() { if (link) { await link.close(); link = null; } }
+
+  async function printRaw(sale, kind) {
+    if (!link) await connect(kind);
+    try { await link.write(buildEscPos(sale)); }
+    catch (err) { link = null; throw err; } // stale connection: reconnect on the next click
+  }
+
+  // UI-friendly wrapper: user-cancelled pickers are silent, other failures are shown.
+  function printSaleRaw(sale) {
+    return printRaw(sale).catch(function (err) {
+      if (err && err.name === 'NotFoundError') return;
+      root.alert('Thermal print failed: ' + ((err && err.message) || err) +
+        '\nTip: use the normal Print button, or check the printer connection.');
+    });
+  }
+
+  root.NotifyReceipt = {
+    config: config, ascii: ascii, money: money, pad: pad, wrap: wrap,
+    printHTML: printHTML, printElement: printElement,
+    buildEscPos: buildEscPos, connect: connect, disconnect: disconnect,
+    printRaw: printRaw, printSaleRaw: printSaleRaw, available: available
+  };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+NotifyReceipt.config.shop={
+  name:'EDEN ELECTRONICS CHUKA',
+  lines:['We care for your home','Chuka Town, Tharaka-Nithi','Tel: 0798928060'],
+  footer:['Thank you for shopping with us!','We care for your home']
+};
+NotifyReceipt.config.paperMm=58;   // P58E roll
+NotifyReceipt.config.cols=32;      // 58mm = 32 characters per line
+NotifyReceipt.config.bleChunk=20;  // safe Bluetooth write size; raise to 100 if your printer is fine with it
+</script>
 <script>
 // ── STOCK LIST ───────────────────────────────────────────
 // Fields: id, n=name, s=SKU, c=category, e=emoji, r=retail price (KES), w=cost price (KES), q=quantity in stock
@@ -1589,7 +1877,7 @@ function checkout(){
   document.getElementById('rct-bc').innerHTML=bc;
   document.getElementById('overlay').classList.add('show');
   // Record in cashier history (store tot for TOT aggregation)
-  cashierSales.unshift({
+  cashierSales.unshift(CUR_SALE={
     num:receiptNum,
     time:now.toLocaleTimeString('en-KE',{hour:'2-digit',minute:'2-digit'}),
     date:now,
@@ -1676,7 +1964,10 @@ function renderCashierHistory(){
 function reprintSale(idx){
   const s=cashierSales[idx];if(!s)return;
   if(!isMgr()&&!mySales().some(r=>r.i===idx))return;
-  document.getElementById('r-date').textContent=new Date().toLocaleDateString('en-KE',{year:'numeric',month:'short',day:'numeric'});
+  CUR_SALE=s;
+  const sd=new Date(s.date);
+  document.getElementById('r-date').textContent=(isNaN(sd)?new Date():sd).toLocaleDateString('en-KE',{year:'numeric',month:'short',day:'numeric'});
+  const rc=document.querySelector('.rpmeta-i:nth-child(3) .rpmv');if(rc)rc.textContent=s.cashier||'Staff';
   document.getElementById('r-pay').textContent=s.pay;
   document.getElementById('r-items').innerHTML=s.lines.map(l=>`<div class="rpi"><div><div class="rpin">${l.n}</div><div class="rpiq">× ${l.qty} @ KES ${l.r.toLocaleString()}</div></div><div class="rpit">KES ${l.t.toLocaleString()}</div></div>`).join('');
   document.getElementById('r-sub').textContent='KES '+s.sub.toLocaleString();
@@ -1986,124 +2277,87 @@ function hideLoader(){document.getElementById('pdfLoader').classList.remove('sho
 // THERMAL PRINTING — P58E Bluetooth (58mm, 32 chars/line)
 // ══════════════════════════════════════════════════════════
 
+let CUR_SALE=null; // the sale on screen / being reprinted (set when a sale is recorded or reprinted)
+
 const THERMAL = {
-  W: 32,           // chars per line on 58mm paper
   device: null,
   characteristic: null,
-  connected: false,
-  // ESC/POS commands
-  ESC_INIT:   [0x1B, 0x40],
-  ALIGN_CTR:  [0x1B, 0x61, 0x01],
-  ALIGN_L:    [0x1B, 0x61, 0x00],
-  BOLD_ON:    [0x1B, 0x45, 0x01],
-  BOLD_OFF:   [0x1B, 0x45, 0x00],
-  DBLW_ON:    [0x1D, 0x21, 0x11],
-  DBLW_OFF:   [0x1D, 0x21, 0x00],
-  FEED3:      [0x0A, 0x0A, 0x0A],
-  CUT:        [0x1D, 0x56, 0x42, 0x00],
+  connected: false
 };
 
-// Sanitise text for PC437 charset (no fancy Unicode)
-function thermalSanitise(s){
-  return String(s)
-    .replace(/['']/g,"'").replace(/[""]/g,'"')
-    .replace(/–/g,'-').replace(/—/g,'--')
-    .replace(/…/g,'...').replace(/•/g,'*')
-    .replace(/[^\x20-\x7E]/g,'?');
+// Eden sale -> shape used by receipt.js
+function edenToSale(s){
+  const pay=String(s.pay||'').replace(/[^\x20-\x7E]/g,'').trim()||'Cash'; // drop the emoji from "Cash 💵"
+  return{
+    receiptNumber:String(s.num||''),
+    cashierName:s.cashier||'Staff',
+    date:s.date,
+    items:(s.lines||[]).map(l=>({product:{name:l.n,sellingPrice:l.r},quantity:l.qty})),
+    subtotal:s.sub,discount:0,total:s.tot,
+    paymentMethod:pay          // no amountPaid: Eden does not record cash tendered, so no Paid/Change lines
+  };
 }
 
-// Centre a string within W columns
-function thermalCentre(s){
-  s=thermalSanitise(s).substring(0,THERMAL.W);
-  const pad=Math.max(0,Math.floor((THERMAL.W-s.length)/2));
-  return ' '.repeat(pad)+s;
+function thermalWhen(sale){
+  const d=new Date(sale.date);const t=isNaN(d)?new Date():d;
+  const two=n=>(n<10?'0':'')+n;
+  return{date:two(t.getDate())+'/'+two(t.getMonth()+1)+'/'+t.getFullYear(),time:two(t.getHours())+':'+two(t.getMinutes())};
 }
 
-// Key-value line: label left, value right, padded to W
-function thermalKV(label,value){
-  label=thermalSanitise(label); value=thermalSanitise(value);
-  const maxL=THERMAL.W-value.length-1;
-  if(label.length>maxL)label=label.substring(0,maxL);
-  const spaces=THERMAL.W-label.length-value.length;
-  return label+' '.repeat(Math.max(1,spaces))+value;
-}
-
-// Divider line
-function thermalDiv(ch='-'){return ch.repeat(THERMAL.W);}
-
-// Build the plain-text receipt for the P58E
+// Plain-text version of the receipt (preview, .txt download, Android bridge). Same layout as the ESC/POS bytes.
 function buildThermalReceipt(sale){
-  const W=THERMAL.W;
-  const lines=[];
-  const push=s=>lines.push(s);
-
-  // Header
-  push(thermalCentre('EDEN ELECTRONICS CHUKA'));
-  push(thermalCentre('We care for your home'));
-  push(thermalCentre('Chuka Town, Tharaka-Nithi'));
-  push(thermalCentre('Tel: 0798928060'));
-  push(thermalDiv());
-  push(thermalCentre('RECEIPT'));
-  push(thermalDiv());
-
-  // Meta
-  push(thermalKV('Receipt:',sale.num||''));
-  push(thermalKV('Date:',sale.date||''));
-  push(thermalKV('Cashier:',sale.cashier||''));
-  push(thermalKV('Payment:',sale.pay||''));
-  push(thermalDiv());
-
-  // Items
-  (sale.lines||[]).forEach(l=>{
-    const name=thermalSanitise(l.n);
-    for(let i=0;i<name.length;i+=W) push(name.substring(i,i+W));
-    const qtyStr='  x'+l.qty+' @ KES '+l.r.toLocaleString();
-    const totStr='KES '+l.t.toLocaleString();
-    push(thermalKV(qtyStr,totStr));
+  const R=NotifyReceipt,c=R.config,W=c.cols,sh=c.shop,cur=c.currency;
+  const x=edenToSale(sale),when=thermalWhen(x);
+  const L=[];
+  const centre=t=>R.wrap(t,W).forEach(l=>L.push(' '.repeat(Math.max(0,Math.floor((W-l.length)/2)))+l));
+  const rule=ch=>L.push(new Array(W+1).join(ch||'-'));
+  centre(sh.name);sh.lines.forEach(centre);rule();
+  L.push(R.pad('Receipt:',x.receiptNumber,W));
+  L.push(R.pad('Date:',when.date,W));
+  L.push(R.pad('Time:',when.time,W));
+  L.push(R.pad('Cashier:',x.cashierName,W));
+  rule();
+  x.items.forEach(it=>{
+    R.wrap(it.product.name,W).forEach(l=>L.push(l));
+    L.push(R.pad('  '+it.quantity+' x '+R.money(it.product.sellingPrice),R.money(it.product.sellingPrice*it.quantity),W));
   });
-
-  push(thermalDiv());
-  push(thermalKV('SUBTOTAL','KES '+sale.sub.toLocaleString()));
-  push(thermalDiv('='));
-  push(thermalKV('TOTAL PAID','KES '+sale.tot.toLocaleString()));
-  push(thermalDiv('='));
-  push(thermalDiv());
-  push(thermalCentre('Thank you for your business!'));
-  push(thermalCentre('We care for your home'));
-  push('');
-  push('');
-  push('');
-
-  return lines.join('\n');
+  rule();
+  L.push(R.pad('Subtotal:',cur+' '+R.money(x.subtotal),W));
+  L.push(R.pad('TOTAL:',cur+' '+R.money(x.total),W));
+  L.push(R.pad('Payment:',x.paymentMethod.toUpperCase(),W));
+  rule();
+  sh.footer.forEach(centre);
+  L.push('','','');
+  return L.join('\n');
 }
 
-// Real ESC/POS bytes: init + text + feed (no cut command: handhelds have no cutter
-// and some firmwares print garbage for GS V)
-function buildEscPosBytes(sale){
-  const body=new TextEncoder().encode(buildThermalReceipt(sale).replace(/\n+$/,'')+'\n');
-  const out=new Uint8Array(2+body.length+4);
-  out.set(THERMAL.ESC_INIT,0);
-  out.set(body,2);
-  out.set([0x0A,0x0A,0x0A,0x0A],2+body.length);
-  return out;
-}
-function bytesToBase64(u8){
-  let bin='';
-  for(let i=0;i<u8.length;i+=0x8000) bin+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000));
-  return btoa(bin);
-}
-
-// Bluetooth Classic printers (most P58 handhelds) cannot be reached by Web Bluetooth.
-// RawBT (free Android app) owns the Bluetooth connection; we hand it the ESC/POS bytes.
-function printViaRawBT(){
-  const sale=getCurrentSaleData();
-  const b64=bytesToBase64(buildEscPosBytes(sale));
-  showToast('Opening RawBT… select your P58 there if asked','success');
-  window.location.href='intent:base64,'+b64+'#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+// Styled receipt for the normal browser/OS print dialog (58mm roll). Everything is inline-styled so it
+// does not depend on the app's CSS.
+function receiptHTML(sale){
+  const R=NotifyReceipt,c=R.config,sh=c.shop,cur=c.currency;
+  const x=edenToSale(sale),when=thermalWhen(x);
+  const e=v=>String(v==null?'':v).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+  const row=(a,b,st)=>'<div style="display:flex;justify-content:space-between;gap:6px;'+(st||'')+'"><span>'+e(a)+'</span><span style="white-space:nowrap">'+e(b)+'</span></div>';
+  const rule='<div style="border-top:1px dashed #000;margin:4px 0"></div>';
+  let h='<style>html,body{height:auto!important;overflow:visible!important}</style>';
+  h+='<div style="font:11px/1.35 \'Courier New\',monospace;color:#000;width:100%">';
+  h+='<div style="text-align:center;font-weight:bold;font-size:13px">'+e(sh.name)+'</div>';
+  sh.lines.forEach(l=>{h+='<div style="text-align:center">'+e(l)+'</div>';});
+  h+=rule+row('Receipt:',x.receiptNumber)+row('Date:',when.date)+row('Time:',when.time)+row('Cashier:',x.cashierName)+rule;
+  x.items.forEach(it=>{
+    const u=it.product.sellingPrice,q=it.quantity;
+    h+='<div style="margin-top:2px;word-break:break-word">'+e(it.product.name)+'</div>'+row('  '+q+' x '+R.money(u),R.money(u*q));
+  });
+  h+=rule+row('Subtotal:',cur+' '+R.money(x.subtotal));
+  h+=row('TOTAL:',cur+' '+R.money(x.total),'font-weight:bold;font-size:13px');
+  h+=row('Payment:',x.paymentMethod.toUpperCase())+rule;
+  sh.footer.forEach(l=>{h+='<div style="text-align:center">'+e(l)+'</div>';});
+  return h+'</div>';
 }
 
 // Collect current receipt data from DOM / sale store
 function getCurrentSaleData(){
+  if(CUR_SALE)return CUR_SALE;
   const receiptEl=document.querySelector('.rpmv');
   const num=receiptEl?receiptEl.textContent.trim():'';
   const dateEl=document.getElementById('r-date');
@@ -2146,6 +2400,8 @@ function hasAndroidBridge(){
 }
 
 function openPrintPanel(){
+  const rb=document.getElementById('raw-print-btn');
+  if(rb){const a=NotifyReceipt.available();rb.style.display=(a.indexOf('usb')>-1||a.indexOf('serial')>-1)?'flex':'none';}
   const sale=getCurrentSaleData();
   const txt=buildThermalReceipt(sale);
   document.getElementById('thermal-preview').textContent=txt;
@@ -2204,7 +2460,7 @@ function updateBtUI(){
     dot.style.background='#22c55e';
     bar.style.borderColor='#bbf7d0';bar.style.background='#f0fdf4';
     txt.textContent='Connected — '+(THERMAL.device?THERMAL.device.name:'P58E');
-    sub.textContent='Ready to print'+(THERMAL.channels?' · channel '+((THERMAL.chIdx||0)+1)+'/'+THERMAL.channels.length:'');
+    sub.textContent='Ready to print';
     btn.style.background='#16a34a';
     lbl.textContent='Print Now';
     btn.querySelector('span').textContent='🖨️';
@@ -2214,7 +2470,7 @@ function updateBtUI(){
     txt.textContent='Not connected';
     sub.textContent='Tap "Connect Printer" to pair your P58E';
     btn.style.background='var(--green)';
-    lbl.textContent='Connect Printer (BLE only)';
+    lbl.textContent='Connect Printer';
     btn.querySelector('span').textContent='📡';
   }
 }
@@ -2272,39 +2528,38 @@ async function connectP58E(){
         '000018f0-0000-1000-8000-00805f9b34fb', // common generic printer
         '0000ff00-0000-1000-8000-00805f9b34fb',
         '0000ffe0-0000-1000-8000-00805f9b34fb',
-        'e7810a71-73ae-499d-8c15-faa9aef0c3f2', // very common on Chinese 58mm thermal printers
-        '49535343-fe7d-4ae5-8fa9-9fafd205e455', // ISSC / Microchip BLE serial
-        '0000ae30-0000-1000-8000-00805f9b34fb',
-        '0000fee7-0000-1000-8000-00805f9b34fb',
-        '0000ff12-0000-1000-8000-00805f9b34fb',
-        '0000fff0-0000-1000-8000-00805f9b34fb',
-        '00001101-0000-1000-8000-00805f9b34fb',
       ]
     });
     lbl.textContent='Connecting…';
     const server=await device.gatt.connect();
-    // Find a writable characteristic: known printer services first, then any service
-    const preferred=['e7810a71-73ae-499d-8c15-faa9aef0c3f2','000018f0-0000-1000-8000-00805f9b34fb','0000ff00-0000-1000-8000-00805f9b34fb','0000ffe0-0000-1000-8000-00805f9b34fb','49535343-fe7d-4ae5-8fa9-9fafd205e455'];
-    const knownChars=['bef8d6c9-9c21-4c9e-b632-bd58c1009f9f','49535343-8841-43f4-a8d4-ecbe34729bb3','0000ff02-0000-1000-8000-00805f9b34fb','00002af1-0000-1000-8000-00805f9b34fb','0000ffe1-0000-1000-8000-00805f9b34fb'];
-    let svcs=[];
-    try{ svcs=await server.getPrimaryServices(); }catch(e){}
-    svcs.sort((a,b)=>{
-      const ia=preferred.indexOf(a.uuid), ib=preferred.indexOf(b.uuid);
-      return (ia<0?99:ia)-(ib<0?99:ib);
-    });
-    const channels=[];
-    for(const svc of svcs){
-      let chars=[];
-      try{ chars=await svc.getCharacteristics(); }catch(e){ continue; }
-      chars.filter(c=>c.properties.write||c.properties.writeWithoutResponse).forEach(c=>channels.push(c));
+    // Try known BLE printer service UUIDs in order
+    const serviceUUIDs=[
+      '000018f0-0000-1000-8000-00805f9b34fb',
+      '0000ff00-0000-1000-8000-00805f9b34fb',
+      '0000ffe0-0000-1000-8000-00805f9b34fb',
+      SPP
+    ];
+    let service=null, characteristic=null;
+    for(const uuid of serviceUUIDs){
+      try{
+        service=await server.getPrimaryService(uuid);
+        if(service)break;
+      }catch(e){}
     }
-    channels.sort((a,b)=>{
-      const ia=knownChars.indexOf(a.uuid), ib=knownChars.indexOf(b.uuid);
-      return (ia<0?99:ia)-(ib<0?99:ib);
-    });
-    if(!channels.length)throw new Error('No writable characteristic found');
-    THERMAL.channels=channels;THERMAL.chIdx=0;
-    const characteristic=channels[0];
+    if(!service){
+      // Last resort — get any available service
+      const svcs=await server.getPrimaryServices();
+      if(svcs.length)service=svcs[0];
+    }
+    if(!service)throw new Error('No printable service found on this device');
+    const chars=await service.getCharacteristics();
+    // Pick writable characteristic
+    for(const c of chars){
+      if(c.properties.write||c.properties.writeWithoutResponse){
+        characteristic=c;break;
+      }
+    }
+    if(!characteristic)throw new Error('No writable characteristic found');
     THERMAL.device=device;
     THERMAL.characteristic=characteristic;
     THERMAL.connected=true;
@@ -2320,27 +2575,28 @@ async function connectP58E(){
     if(err.name==='NotFoundError'||err.message.includes('cancelled')){
       showToast('Pairing cancelled','error');
     } else if(err.message.includes('No printable')||err.message.includes('No writable')){
-      showToast('This printer is Bluetooth Classic, which browsers cannot use. Tap "Print with RawBT" instead.','error');
+      showToast('P58E paired but Classic BT not supported by browser. Use .txt download + PrintHand app.','error');
     } else {
       showToast('Could not connect: '+err.message,'error');
     }
-    lbl.textContent='Connect Printer (BLE only)';btn.disabled=false;
+    lbl.textContent='Connect Printer';btn.disabled=false;
     updateBtUI();
   }
   btn.disabled=false;
 }
 
 // ── SEND TO PRINTER ───────────────────────────────────────
-async function sendThermalPrint(retry){
+async function sendThermalPrint(){
   const sale=getCurrentSaleData();
   try{
-    const bytes=buildEscPosBytes(sale);
-    const CHUNK=20; // default BLE ATT payload; larger writes are dropped by many printers
+    const bytes=NotifyReceipt.buildEscPos(edenToSale(sale)); // init, text, bold total, feed + cut
+    const CHUNK=NotifyReceipt.config.bleChunk;
     for(let i=0;i<bytes.length;i+=CHUNK){
       await writeChunk(THERMAL.characteristic,bytes.slice(i,i+CHUNK));
       await delay(25);
     }
-    showToast('Sent to printer. If nothing printed, tap "Nothing printed? Try next channel".','success');
+    showToast('Receipt sent to printer ✓','success');
+    setTimeout(()=>closePrintPanel(),1200);
   }catch(err){
     showToast('Print failed: '+err.message,'error');
     THERMAL.connected=false;THERMAL.characteristic=null;
@@ -2349,20 +2605,11 @@ async function sendThermalPrint(retry){
 }
 
 async function writeChunk(char,data){
-  if(char.properties.write){
-    if(char.writeValueWithResponse) await char.writeValueWithResponse(data); else await char.writeValue(data);
-  } else {
+  if(char.properties.writeWithoutResponse){
     await char.writeValueWithoutResponse(data);
+  } else {
+    await char.writeValue(data);
   }
-}
-// Receipt went out but nothing printed? Switch to the next writable channel and print again
-async function tryNextChannel(){
-  if(!THERMAL.channels||THERMAL.channels.length<2){showToast('No other channel on this printer. Use RawBT.','error');return;}
-  THERMAL.chIdx=(THERMAL.chIdx+1)%THERMAL.channels.length;
-  THERMAL.characteristic=THERMAL.channels[THERMAL.chIdx];
-  showToast('Trying channel '+(THERMAL.chIdx+1)+' of '+THERMAL.channels.length+'…','success');
-  updateBtUI();
-  await sendThermalPrint(true);
 }
 function delay(ms){return new Promise(r=>setTimeout(r,ms));}
 
@@ -2370,7 +2617,7 @@ function delay(ms){return new Promise(r=>setTimeout(r,ms));}
 function downloadReceiptTxt(){
   const sale=getCurrentSaleData();
   const txt=buildThermalReceipt(sale);
-  const blob=new Blob([txt],{type:'text/plain'});
+  const blob=new Blob([txt],{type:'text/plain;charset=utf-8'});
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);
   a.download='Eden-'+( sale.num||'receipt').replace(/[^a-zA-Z0-9-]/g,'')+'.txt';
@@ -2380,17 +2627,17 @@ function downloadReceiptTxt(){
 
 // ── BROWSER PRINT ─────────────────────────────────────────
 function browserPrint(){
-  const pa=document.getElementById('print-area');
-  const rp=document.querySelector('.rp');
-  if(!rp)return;
-  closePrintPanel();
-  pa.innerHTML='';pa.className='receipt-print';
-  const clone=rp.cloneNode(true);
-  const acts=clone.querySelector('.rpacts');
-  if(acts)acts.style.display='none';
-  pa.appendChild(clone);pa.style.display='block';
-  window.print();
-  setTimeout(()=>{pa.style.display='none';pa.innerHTML='';},1000);
+  const sale=getCurrentSaleData();
+  if(!sale||!(sale.lines||[]).length){showToast('Nothing to print','error');return;}
+  NotifyReceipt.printHTML(receiptHTML(sale));   // hidden iframe: no popup blocking, prints once laid out
+  setTimeout(()=>closePrintPanel(),800);
+}
+
+// Raw ESC/POS over USB or Serial (Chrome/Edge on a PC or Android; needs https or localhost)
+async function rawPrint(){
+  const sale=getCurrentSaleData();
+  if(!sale||!(sale.lines||[]).length){showToast('Nothing to print','error');return;}
+  await NotifyReceipt.printSaleRaw(edenToSale(sale));
 }
 
 // Legacy alias (used by reprintSale path — now opens panel)
